@@ -2,7 +2,7 @@
 
 set -e
 
-VERSIONS=("16.04" "18.04" "20.04" "22.04" "24.04" "26.04")
+VERSIONS=("20.04" "22.04" "24.04")
 
 mkdir -p dist
 
@@ -11,7 +11,7 @@ for VERSION in "${VERSIONS[@]}"; do
     echo "Gerando .deb para Ubuntu $VERSION"
     echo "======================================"
 
-    IMAGE_NAME="rackctl-builder:$VERSION"
+    IMAGE_NAME="rackctl-builder-ubuntu-$VERSION"
 
     docker build \
         --build-arg UBUNTU_VERSION="$VERSION" \
@@ -22,9 +22,20 @@ for VERSION in "${VERSIONS[@]}"; do
 
     mkdir -p "dist/ubuntu-$VERSION"
 
-    docker cp "$CONTAINER_ID:/app/deb_dist/." "dist/ubuntu-$VERSION/" || true
+    docker cp \
+        "$CONTAINER_ID:/app/deb_dist/." \
+        "dist/ubuntu-$VERSION/" || true
 
     docker rm "$CONTAINER_ID"
 
+    # opcional limpar imagem
+    docker rmi "$IMAGE_NAME" || true
+
+    echo
     echo "Pacote gerado em dist/ubuntu-$VERSION"
+    echo
 done
+
+echo "======================================"
+echo "Build finalizado!"
+echo "======================================"
