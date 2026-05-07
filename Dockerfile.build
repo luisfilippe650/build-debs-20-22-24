@@ -1,50 +1,41 @@
-ARG UBUNTU_VERSION=22.04
+#!/bin/bash
 
-FROM ubuntu:${UBUNTU_VERSION}
+set -e
 
-ENV DEBIAN_FRONTEND=noninteractive
+VERSIONS=("20.04" "22.04" "24.04")
 
-RUN apt-get update && apt-get install -y \
-    software-properties-common \
-    build-essential \
-    debhelper \
-    dh-python \
-    fakeroot \
-    curl \
-    python3-all
+mkdir -p dist
 
-RUN if [ "$UBUNTU_VERSION" = "16.04" ] || [ "$UBUNTU_VERSION" = "18.04" ]; then \
-        add-apt-repository ppa:deadsnakes/ppa -y && \
-        apt-get update && \
-        apt-get install -y \
-            python3.8 \
-            python3.8-dev \
-            python3.8-distutils \
-            python3-pip && \
-        ln -sf /usr/bin/python3.8 /usr/bin/python3 ; \
-    else \
-        apt-get install -y \
-            python3 \
-            python3-pip \
-            python3-setuptools \
-            python3-wheel ; \
-    fi
+for VERSION in "${VERSIONS[@]}"; do
+    echo "======================================"
+    echo "Gerando .deb para Ubuntu $VERSION"
+    echo "======================================"
 
-WORKDIR /app
+    IMAGE_NAME="rackctl-builder-ubuntu-$VERSION"
 
-COPY . .
+    docker build \
+        --build-arg UBUNTU_VERSION="$VERSION" \
+        -t "$IMAGE_NAME" \
+        -f Dockerfile.build .
 
-RUN pip3 install \
-        stdeb \
-        PyYAML \
-        requests \
-        python-dotenv \
-    || pip3 install --break-system-packages \
-        stdeb \
-        PyYAML \
-        requests \
-        python-dotenv
+    CONTAINER_ID=$(docker create "$IMAGE_NAME")
 
-RUN DEB_BUILD_OPTIONS=nocheck \
-    python3 setup.py \
-    --command-packages=stdeb.command bdist_deb
+    mkdir -p "dist/ubuntu-$VERSION"
+
+    docker cp \
+        "$CONTAINER_ID:/app/deb_dist/." \
+        "dist/ubuntu-$VERSION/" || true
+
+    docker rm "$CONTAINER_ID"
+
+    # opcional limpar imagem
+    docker rmi "$IMAGE_NAME" || true
+
+    echo
+    echo "Pacote gerado em dist/ubuntu-$VERSION"
+    echo
+done
+
+echo "======================================"
+echo "Build finalizado!"
+echo "======================================"
