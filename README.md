@@ -1,124 +1,108 @@
-# rackctl — Debian Package Builder
+# Descrição do Script `build.sh`
 
-> Ferramenta de linha de comando para gerenciamento de racks, com suporte a empacotamento `.deb` nativo para múltiplas versões do Ubuntu.
+## Visão Geral
 
----
-
-## Descrição
-
-O **rackctl** é uma ferramenta CLI desenvolvida em Python para gerenciamento e controle de racks de servidores. Este repositório contém toda a infraestrutura necessária para compilar e distribuir pacotes `.deb` compatíveis com as versões LTS do Ubuntu (20.04, 22.04 e 24.04), utilizando Docker para garantir builds isolados e reproduzíveis em cada ambiente alvo.
+O `build.sh` é um script de automação de build responsável por gerar pacotes `.deb` do projeto **rackctl** para múltiplas versões do Ubuntu de forma isolada e reproduzível, utilizando Docker como ambiente de compilação.
 
 ---
 
-## Pré-requisitos
-
-- [Docker](https://www.docker.com/) instalado e em execução
-- Bash (Linux/macOS ou WSL no Windows)
-- Acesso à internet para download das imagens base do Ubuntu
-
----
-
-## Estrutura do Projeto
+## Fluxo de Execução
 
 ```
-.
-├── Dockerfile.build        # Dockerfile multi-versão para build do .deb
-├── build.sh                # Script principal de build para todas as versões
-├── setup.py                # Configuração do pacote Python (usado pelo stdeb)
-├── dist/
-│   ├── ubuntu-20.04/       # Pacote .deb gerado para Ubuntu 20.04
-│   ├── ubuntu-22.04/       # Pacote .deb gerado para Ubuntu 22.04
-│   └── ubuntu-24.04/       # Pacote .deb gerado para Ubuntu 24.04
-└── ...
+build.sh
+   │
+   ├── Para cada versão Ubuntu (20.04 / 22.04 / 24.04)
+   │       │
+   │       ├── 1. docker build   → Cria imagem com ambiente de compilação
+   │       ├── 2. docker create  → Instancia container (sem executar)
+   │       ├── 3. docker cp      → Copia o .deb gerado para dist/ubuntu-<versão>/
+   │       ├── 4. docker rm      → Remove o container
+   │       └── 5. docker rmi     → Remove a imagem (limpeza)
+   │
+   └── Exibe mensagem de conclusão
 ```
 
 ---
 
-## Como Buildar
+## Detalhamento de Cada Etapa
 
-Execute o script de build para gerar os pacotes `.deb` para todas as versões suportadas do Ubuntu:
-
+### 1. Definição das versões alvo
 ```bash
-chmod +x build.sh
-./build.sh
+VERSIONS=("20.04" "22.04" "24.04")
 ```
+Array com as versões LTS do Ubuntu para as quais o pacote será compilado. Cada versão gera um artefato independente.
 
-O script irá:
+---
 
-1. Iterar sobre as versões `20.04`, `22.04` e `24.04`
-2. Construir uma imagem Docker isolada para cada versão
-3. Compilar o pacote `.deb` dentro do container
-4. Exportar o artefato para `dist/ubuntu-<versão>/`
-5. Remover o container e a imagem após o build
+### 2. Build da imagem Docker
+```bash
+docker build \
+    --build-arg UBUNTU_VERSION="$VERSION" \
+    -t "$IMAGE_NAME" \
+    -f Dockerfile.build .
+```
+Constrói uma imagem Docker passando a versão do Ubuntu como argumento de build (`ARG`). O `Dockerfile.build` usa esse argumento para configurar o ambiente correto (dependências, Python, etc.) e já executa a compilação do `.deb` durante o build da imagem.
 
-Os pacotes finais estarão disponíveis em:
+> O pacote `.deb` é gerado **dentro da imagem**, não em execução do container.
+
+---
+
+### 3. Criação do container (sem execução)
+```bash
+CONTAINER_ID=$(docker create "$IMAGE_NAME")
+```
+Instancia um container a partir da imagem **sem iniciá-lo**. O objetivo é apenas ter acesso ao sistema de arquivos interno para copiar o artefato gerado.
+
+---
+
+### 4. Cópia do artefato
+```bash
+docker cp "$CONTAINER_ID:/app/deb_dist/." "dist/ubuntu-$VERSION/"
+```
+Copia o conteúdo do diretório `/app/deb_dist/` (onde o `stdeb` gera o `.deb`) para a pasta local `dist/ubuntu-<versão>/`. O `|| true` garante que uma falha nessa etapa não aborte o script inteiro.
+
+---
+
+### 5. Limpeza
+```bash
+docker rm "$CONTAINER_ID"
+docker rmi "$IMAGE_NAME" || true
+```
+Remove o container e a imagem Docker após a extração do artefato, liberando espaço em disco. A remoção da imagem é opcional (`|| true`), então falhas são ignoradas.
+
+---
+
+## Saída Gerada
+
+Ao final da execução, os pacotes estarão organizados em:
 
 ```
 dist/
 ├── ubuntu-20.04/
+│   └── python3-rackctl_<versão>_all.deb
 ├── ubuntu-22.04/
+│   └── python3-rackctl_<versão>_all.deb
 └── ubuntu-24.04/
+    └── python3-rackctl_<versão>_all.deb
 ```
 
 ---
 
-## Instalação do Pacote
+## Comportamentos Importantes
 
-Após o build, instale o pacote na máquina de destino:
-
-```bash
-sudo dpkg -i dist/ubuntu-22.04/python3-rackctl_*.deb
-sudo apt-get install -f  # Resolve dependências, se necessário
-```
-
----
-
-## Versões Suportadas
-
-| Ubuntu | Status |
-|--------|--------|
-| 20.04 LTS (Focal) | ✅ Suportado |
-| 22.04 LTS (Jammy) | ✅ Suportado |
-| 24.04 LTS (Noble) | ✅ Suportado |
+| Comportamento | Detalhe |
+|---|---|
+| `set -e` | O script aborta imediatamente se qualquer comando falhar |
+| `\|\| true` no `docker cp` | Falha na cópia é ignorada — o loop continua para a próxima versão |
+| `\|\| true` no `docker rmi` | Falha ao remover a imagem é ignorada (ex: imagem em uso) |
+| Build isolado por versão | Cada versão usa sua própria imagem, sem interferência entre builds |
+| Compilação no build da imagem | O `.deb` é gerado no `RUN` do Dockerfile, não em `CMD`/`ENTRYPOINT` |
 
 ---
 
-## Dependências Python
+## Dependências Necessárias
 
-O pacote inclui as seguintes dependências:
-
-- `PyYAML` — Parsing de arquivos de configuração YAML
-- `requests` — Comunicação HTTP com APIs
-- `python-dotenv` — Gerenciamento de variáveis de ambiente via `.env`
-
----
-
-## Como Funciona o Build
-
-O `Dockerfile.build` utiliza um argumento `UBUNTU_VERSION` para adaptar o ambiente de compilação conforme a versão do sistema operacional alvo. O empacotamento é feito com o [`stdeb`](https://github.com/astraw/stdeb), que converte pacotes Python (`setup.py`) em pacotes `.deb` nativos.
-
-```bash
-# Build manual para uma versão específica
-docker build --build-arg UBUNTU_VERSION=22.04 -t rackctl-builder-ubuntu-22.04 -f Dockerfile.build .
-```
-
----
-
-## Desenvolvimento
-
-Para contribuir ou modificar o projeto:
-
-```bash
-# Clone o repositório
-git clone https://github.com/seu-usuario/rackctl.git
-cd rackctl
-
-# Instale as dependências localmente
-pip install -e ".[dev]"
-```
-
----
-
-## Licença
-
-Distribuído sob a licença MIT. Consulte o arquivo `LICENSE` para mais detalhes.
+- **Docker** — instalado e com daemon em execução
+- **Bash** — versão 4.0 ou superior (uso de arrays)
+- **`Dockerfile.build`** — deve estar na raiz do projeto
+- **`setup.py`** — necessário para o `stdeb` gerar o `.deb`
